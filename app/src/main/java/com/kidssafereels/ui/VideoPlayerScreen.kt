@@ -4,6 +4,7 @@ package com.kidssafereels.ui
 
 import android.annotation.SuppressLint
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -98,111 +100,71 @@ fun VideoPlayerScreen(
 
 /**
  * Vertical pager for swiping through videos like TikTok/Reels
+ * Supports infinite looping - goes back to first video after last
  */
 @Composable
 fun VideoReelsPager(
     videos: List<Video>,
     viewModel: VideoViewModel
 ) {
-    val pagerState = rememberPagerState(pageCount = { videos.size })
+    // Use a large number to simulate infinite scroll
+    val infinitePageCount = Int.MAX_VALUE / 2
+    val startPage = infinitePageCount / 2 - (infinitePageCount / 2) % videos.size
     
-    LaunchedEffect(pagerState.currentPage) {
-        viewModel.setCurrentVideoIndex(pagerState.currentPage)
+    val pagerState = rememberPagerState(
+        initialPage = startPage,
+        pageCount = { infinitePageCount }
+    )
+    
+    // Calculate actual video index using modulo
+    val actualIndex = pagerState.currentPage % videos.size
+    
+    LaunchedEffect(actualIndex) {
+        viewModel.setCurrentVideoIndex(actualIndex)
     }
     
     VerticalPager(
         state = pagerState,
         modifier = Modifier.fillMaxSize()
     ) { page ->
+        val videoIndex = page % videos.size
         VideoPage(
-            video = videos[page],
+            video = videos[videoIndex],
             isCurrentPage = page == pagerState.currentPage,
-            pageIndex = page,
+            pageIndex = videoIndex,
             totalPages = videos.size
         )
     }
 }
 
 /**
- * Extract YouTube video ID from various URL formats
+ * Convert YouTube URL to mobile-friendly format
  */
-fun extractYouTubeVideoId(url: String): String? {
+fun getYouTubeMobileUrl(url: String): String {
+    // Extract video ID from various formats
     val patterns = listOf(
-        // youtube.com/shorts/VIDEO_ID
         Regex("youtube\\.com/shorts/([a-zA-Z0-9_-]+)"),
-        // youtu.be/VIDEO_ID
         Regex("youtu\\.be/([a-zA-Z0-9_-]+)"),
-        // youtube.com/watch?v=VIDEO_ID
         Regex("youtube\\.com/watch\\?v=([a-zA-Z0-9_-]+)"),
-        // youtube.com/embed/VIDEO_ID
         Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)"),
-        // youtube.com/v/VIDEO_ID
         Regex("youtube\\.com/v/([a-zA-Z0-9_-]+)")
     )
     
     for (pattern in patterns) {
         val match = pattern.find(url)
         if (match != null) {
-            return match.groupValues[1]
+            val videoId = match.groupValues[1]
+            // Use YouTube Shorts URL for better mobile experience
+            return "https://www.youtube.com/shorts/$videoId"
         }
     }
-    return null
+    
+    // If no pattern matches, return original URL
+    return url
 }
 
 /**
- * Generate HTML for embedded YouTube player optimized for kids
- */
-fun generateYouTubePlayerHtml(videoId: String): String {
-    return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <style>
-                * {
-                    margin: 0;
-                    padding: 0;
-                    box-sizing: border-box;
-                }
-                html, body {
-                    width: 100%;
-                    height: 100%;
-                    background-color: #000;
-                    overflow: hidden;
-                }
-                .video-container {
-                    position: fixed;
-                    top: 0;
-                    left: 0;
-                    width: 100%;
-                    height: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    background-color: #000;
-                }
-                iframe {
-                    width: 100%;
-                    height: 100%;
-                    border: none;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="video-container">
-                <iframe 
-                    src="https://www.youtube.com/embed/$videoId?autoplay=1&loop=1&playlist=$videoId&controls=1&modestbranding=1&rel=0&showinfo=0&fs=0&playsinline=1&mute=0&enablejsapi=1"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowfullscreen>
-                </iframe>
-            </div>
-        </body>
-        </html>
-    """.trimIndent()
-}
-
-/**
- * Single video page with YouTube player and overlay
+ * Single video page with YouTube WebView
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -215,8 +177,8 @@ fun VideoPage(
     val context = LocalContext.current
     var isLoading by remember { mutableStateOf(true) }
     
-    val videoId = remember(video.url) { 
-        extractYouTubeVideoId(video.url) 
+    val youtubeUrl = remember(video.url) { 
+        getYouTubeMobileUrl(video.url) 
     }
     
     // Remember WebView to control playback
@@ -226,16 +188,26 @@ fun VideoPage(
     LaunchedEffect(isCurrentPage) {
         webView?.let { wv ->
             if (isCurrentPage) {
-                // Resume video
                 wv.onResume()
+                // Try to play the video
                 wv.evaluateJavascript(
-                    "document.querySelector('iframe').contentWindow.postMessage('{\"event\":\"command\",\"func\":\"playVideo\",\"args\":\"\"}', '*');",
+                    """
+                    (function() {
+                        var video = document.querySelector('video');
+                        if (video) video.play();
+                    })();
+                    """.trimIndent(),
                     null
                 )
             } else {
-                // Pause video
+                // Pause video when not visible
                 wv.evaluateJavascript(
-                    "document.querySelector('iframe').contentWindow.postMessage('{\"event\":\"command\",\"func\":\"pauseVideo\",\"args\":\"\"}', '*');",
+                    """
+                    (function() {
+                        var video = document.querySelector('video');
+                        if (video) video.pause();
+                    })();
+                    """.trimIndent(),
                     null
                 )
                 wv.onPause()
@@ -255,102 +227,141 @@ fun VideoPage(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        if (videoId != null) {
-            // YouTube WebView Player
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            mediaPlaybackRequiresUserGesture = false
-                            loadWithOverviewMode = true
-                            useWideViewPort = true
-                            cacheMode = WebSettings.LOAD_DEFAULT
-                            setSupportZoom(false)
-                            builtInZoomControls = false
-                            displayZoomControls = false
+        // YouTube WebView - loads YouTube directly like a browser
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                    
+                    // Enable cookies for YouTube
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        mediaPlaybackRequiresUserGesture = false
+                        loadWithOverviewMode = true
+                        useWideViewPort = true
+                        cacheMode = WebSettings.LOAD_DEFAULT
+                        setSupportZoom(false)
+                        builtInZoomControls = false
+                        displayZoomControls = false
+                        allowContentAccess = true
+                        allowFileAccess = true
+                        databaseEnabled = true
+                        javaScriptCanOpenWindowsAutomatically = true
+                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        userAgentString = "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                    }
+                    
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            isLoading = false
+                            
+                            // Auto-play video after page loads
+                            view?.evaluateJavascript(
+                                """
+                                (function() {
+                                    var video = document.querySelector('video');
+                                    if (video) {
+                                        video.play();
+                                        video.loop = true;
+                                    }
+                                })();
+                                """.trimIndent(),
+                                null
+                            )
                         }
                         
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                            // Stay within YouTube
+                            val url = request?.url?.toString() ?: return false
+                            return if (url.contains("youtube.com") || url.contains("youtu.be")) {
+                                false // Allow YouTube navigation
+                            } else {
+                                true // Block other URLs
+                            }
+                        }
+                    }
+                    
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            super.onProgressChanged(view, newProgress)
+                            if (newProgress > 80) {
                                 isLoading = false
                             }
                         }
-                        
-                        webChromeClient = WebChromeClient()
-                        
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                        
-                        loadDataWithBaseURL(
-                            "https://www.youtube.com",
-                            generateYouTubePlayerHtml(videoId),
-                            "text/html",
-                            "UTF-8",
-                            null
-                        )
-                        
-                        webView = this
                     }
-                },
-                modifier = Modifier.fillMaxSize(),
-                update = { wv ->
-                    webView = wv
+                    
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    
+                    // Load the YouTube URL directly
+                    loadUrl(youtubeUrl)
+                    
+                    webView = this
                 }
-            )
-        } else {
-            // Invalid URL message
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "⚠️",
-                        fontSize = 60.sp
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Invalid YouTube URL",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = video.url,
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp)
-                    )
-                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            update = { wv ->
+                webView = wv
             }
-        }
+        )
         
         // Loading indicator
         AnimatedVisibility(
-            visible = isLoading && videoId != null,
+            visible = isLoading,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.Center)
         ) {
-            CircularProgressIndicator(
-                color = KidsPink,
-                modifier = Modifier.size(60.dp),
-                strokeWidth = 4.dp
-            )
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.Black.copy(alpha = 0.7f)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = KidsPink,
+                    modifier = Modifier.size(50.dp),
+                    strokeWidth = 4.dp
+                )
+            }
         }
         
-        // Bottom gradient overlay with video info
+        // Top overlay with app name
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(100.dp)
+                .align(Alignment.TopCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.6f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+        
+        // App title at top
+        Text(
+            text = "🌟 Kids Safe Reels 🌟",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 45.dp)
+        )
+        
+        // Bottom overlay with video info
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -363,27 +374,27 @@ fun VideoPage(
                         )
                     )
                 )
-                .padding(20.dp)
+                .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
             Column {
-                // Video title with fun styling
+                // Video title
                 Text(
                     text = video.title,
                     color = Color.White,
-                    fontSize = 20.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
                 
                 if (video.description != null) {
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = video.description,
                         color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 13.sp
+                        fontSize = 12.sp
                     )
                 }
                 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 
                 // Page indicator
                 Row(
@@ -412,47 +423,18 @@ fun VideoPage(
                     }
                 }
                 
-                Spacer(modifier = Modifier.height(30.dp))
-            }
-        }
-        
-        // Top gradient for status bar
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(80.dp)
-                .align(Alignment.TopCenter)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.6f),
-                            Color.Transparent
-                        )
+                // Swipe hint (only show on first view)
+                if (pageIndex == 0 && totalPages > 1) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "⬆️ Swipe to browse • Videos loop forever!",
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = 11.sp
                     )
-                )
-        )
-        
-        // App title at top
-        Text(
-            text = "🌟 Kids Safe Reels 🌟",
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 45.dp)
-        )
-        
-        // Swipe hint for first video
-        if (pageIndex == 0 && totalPages > 1) {
-            Text(
-                text = "⬆️ Swipe up for more",
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 8.dp)
-            )
+                }
+                
+                Spacer(modifier = Modifier.height(20.dp))
+            }
         }
     }
 }
