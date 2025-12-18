@@ -17,6 +17,14 @@ class VideoRepository {
         .addInterceptor(HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
         })
+        // Disable caching to always get fresh video list
+        .addInterceptor { chain ->
+            val request = chain.request().newBuilder()
+                .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                .header("Pragma", "no-cache")
+                .build()
+            chain.proceed(request)
+        }
         .build()
     
     private val retrofit = Retrofit.Builder()
@@ -48,7 +56,8 @@ class VideoRepository {
             // Replace this URL with your GitHub Gist raw URL
             // Example: https://gist.githubusercontent.com/YOUR_USERNAME/GIST_ID/raw/videos.json
             
-            val gistUrl = "https://gist.githubusercontent.com/GowthamGanapathi/543bd8d52be0f15baefd529f50af5765/raw/7bcea081f72029f3a2c9502db2f32f19ab1cf595/videos.json"
+            // IMPORTANT: Remove the commit hash to always get latest version!
+            val gistUrl = "https://gist.githubusercontent.com/GowthamGanapathi/543bd8d52be0f15baefd529f50af5765/raw/videos.json"
             
             // ========================================================
             

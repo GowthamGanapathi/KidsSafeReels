@@ -191,15 +191,70 @@ fun SimpleVideoPlayer(
                             super.onPageFinished(view, url)
                             isLoading = false
                             
-                            // Try to auto-play
+                            // Inject CSS to hide YouTube recommendations, comments, and other UI
+                            // Also disable YouTube's internal swipe navigation
                             view?.evaluateJavascript(
                                 """
                                 (function() {
+                                    // Create style element to hide unwanted YouTube elements
+                                    var style = document.createElement('style');
+                                    style.textContent = `
+                                        /* Hide recommendations, related videos, comments */
+                                        ytm-reel-shelf-renderer,
+                                        ytm-shorts-shelf-renderer,
+                                        ytm-related-videos-renderer,
+                                        ytm-comments-section-renderer,
+                                        ytm-comment-section-renderer,
+                                        ytm-engagement-panel-section-list-renderer,
+                                        .related-chips-slot-wrapper,
+                                        .slim-owner-section,
+                                        ytm-shorts-action-buttons,
+                                        .reel-player-overlay-actions,
+                                        .pivot-bar,
+                                        ytm-pivot-bar-renderer,
+                                        .shorts-title-channel,
+                                        .reel-player-page-segment,
+                                        ytm-shorts-reels-segment-renderer,
+                                        [class*="related"],
+                                        [class*="suggestion"],
+                                        [class*="recommend"] {
+                                            display: none !important;
+                                        }
+                                        
+                                        /* Hide swipe indicators */
+                                        .reel-player-navigation-up,
+                                        .reel-player-navigation-down,
+                                        .navigation-container {
+                                            display: none !important;
+                                        }
+                                        
+                                        /* Make video fullscreen */
+                                        video {
+                                            width: 100vw !important;
+                                            height: 100vh !important;
+                                            object-fit: cover !important;
+                                        }
+                                        
+                                        /* Hide bottom bar */
+                                        ytm-mobile-topbar-renderer,
+                                        .mobile-topbar-header,
+                                        .ytm-pivot-bar-renderer {
+                                            display: none !important;
+                                        }
+                                    `;
+                                    document.head.appendChild(style);
+                                    
+                                    // Auto-play and loop the video
                                     var video = document.querySelector('video');
                                     if (video) {
                                         video.play();
                                         video.loop = true;
+                                        video.muted = false;
                                     }
+                                    
+                                    // Disable touch events on the page to prevent YouTube swipe
+                                    document.body.style.overflow = 'hidden';
+                                    document.body.style.touchAction = 'none';
                                 })();
                                 """.trimIndent(),
                                 null
@@ -207,8 +262,9 @@ fun SimpleVideoPlayer(
                         }
                         
                         override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                            val url = request?.url?.toString() ?: return false
-                            return !(url.contains("youtube.com") || url.contains("youtu.be"))
+                            // BLOCK ALL navigation - only allow the exact video we loaded
+                            // This prevents YouTube from navigating to other videos
+                            return true
                         }
                     }
                     
