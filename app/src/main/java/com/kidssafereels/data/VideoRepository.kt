@@ -53,11 +53,13 @@ class VideoRepository {
             // ========================================================
             // 🔴 CONFIGURE YOUR VIDEO LIST URL HERE 🔴
             // ========================================================
-            // Replace this URL with your GitHub Gist raw URL
-            // Example: https://gist.githubusercontent.com/YOUR_USERNAME/GIST_ID/raw/videos.json
             
-            // IMPORTANT: Remove the commit hash to always get latest version!
-            val gistUrl = "https://gist.githubusercontent.com/GowthamGanapathi/543bd8d52be0f15baefd529f50af5765/raw/videos.json"
+            // Base URL without commit hash = always gets latest
+            val baseUrl = "https://gist.githubusercontent.com/GowthamGanapathi/543bd8d52be0f15baefd529f50af5765/raw/videos.json"
+            
+            // Add timestamp to bust cache completely
+            val timestamp = System.currentTimeMillis()
+            val gistUrl = "$baseUrl?t=$timestamp"
             
             // ========================================================
             
