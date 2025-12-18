@@ -1,0 +1,26 @@
+[
+  {
+    "id": "1",
+    "title": "🔤 Learn ABC",
+    "url": "https://youtube.com/shorts/baomxpKyoNs",
+    "description": "Fun alphabet song!"
+  },
+  {
+    "id": "2",
+    "title": "🔢 Counting 1-10",
+    "url": "https://youtube.com/shorts/hjIBu2z0isU",
+    "description": "Learn to count!"
+  },
+  {
+    "id": "3",
+    "title": "🎵 Baby Shark",
+    "url": "https://youtube.com/shorts/YOUR_VIDEO_ID",
+    "description": "Famous kids song!"
+  },
+  {
+    "id": "4",
+    "title": "🌈 Colors Song",
+    "url": "https://www.youtube.com/watch?v=YOUR_VIDEO_ID",
+    "description": "Learn all the colors!"
+  }
+]
