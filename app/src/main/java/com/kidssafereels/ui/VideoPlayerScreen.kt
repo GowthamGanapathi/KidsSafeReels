@@ -3,12 +3,14 @@
 package com.kidssafereels.ui
 
 import android.annotation.SuppressLint
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlin.math.abs
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -228,9 +230,38 @@ fun VideoPage(
             .background(Color.Black)
     ) {
         // YouTube WebView - loads YouTube directly like a browser
+        // Custom WebView that allows vertical swipes to pass through to the pager
         AndroidView(
             factory = { ctx ->
-                WebView(ctx).apply {
+                object : WebView(ctx) {
+                    private var startY = 0f
+                    private var startX = 0f
+                    private val swipeThreshold = 100f
+                    
+                    override fun onTouchEvent(event: MotionEvent): Boolean {
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                startY = event.y
+                                startX = event.x
+                                parent?.requestDisallowInterceptTouchEvent(true)
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                val deltaY = event.y - startY
+                                val deltaX = event.x - startX
+                                
+                                // If vertical swipe is detected, let parent handle it
+                                if (abs(deltaY) > swipeThreshold && abs(deltaY) > abs(deltaX) * 1.5f) {
+                                    parent?.requestDisallowInterceptTouchEvent(false)
+                                    return false
+                                }
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                parent?.requestDisallowInterceptTouchEvent(false)
+                            }
+                        }
+                        return super.onTouchEvent(event)
+                    }
+                }.apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
