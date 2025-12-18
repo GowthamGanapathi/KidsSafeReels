@@ -3,34 +3,35 @@
 package com.kidssafereels.ui
 
 import android.annotation.SuppressLint
-import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import kotlin.math.abs
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.pager.VerticalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -41,6 +42,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -49,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -65,9 +69,10 @@ import com.kidssafereels.ui.theme.KidsPurple
 import com.kidssafereels.ui.theme.KidsYellow
 import com.kidssafereels.viewmodel.VideoUiState
 import com.kidssafereels.viewmodel.VideoViewModel
+import kotlin.math.abs
 
 /**
- * Main video player screen with vertical swipe navigation
+ * Main video player screen - Simple approach with navigation buttons
  */
 @Composable
 fun VideoPlayerScreen(
@@ -85,7 +90,7 @@ fun VideoPlayerScreen(
                 LoadingScreen()
             }
             is VideoUiState.Success -> {
-                VideoReelsPager(
+                SimpleVideoPlayer(
                     videos = state.videos,
                     viewModel = viewModel
                 )
@@ -101,120 +106,28 @@ fun VideoPlayerScreen(
 }
 
 /**
- * Vertical pager for swiping through videos like TikTok/Reels
- * Supports infinite looping - goes back to first video after last
- */
-@Composable
-fun VideoReelsPager(
-    videos: List<Video>,
-    viewModel: VideoViewModel
-) {
-    // Use a large number to simulate infinite scroll
-    val infinitePageCount = Int.MAX_VALUE / 2
-    val startPage = infinitePageCount / 2 - (infinitePageCount / 2) % videos.size
-    
-    val pagerState = rememberPagerState(
-        initialPage = startPage,
-        pageCount = { infinitePageCount }
-    )
-    
-    // Calculate actual video index using modulo
-    val actualIndex = pagerState.currentPage % videos.size
-    
-    LaunchedEffect(actualIndex) {
-        viewModel.setCurrentVideoIndex(actualIndex)
-    }
-    
-    VerticalPager(
-        state = pagerState,
-        modifier = Modifier.fillMaxSize()
-    ) { page ->
-        val videoIndex = page % videos.size
-        VideoPage(
-            video = videos[videoIndex],
-            isCurrentPage = page == pagerState.currentPage,
-            pageIndex = videoIndex,
-            totalPages = videos.size
-        )
-    }
-}
-
-/**
- * Convert YouTube URL to mobile-friendly format
- */
-fun getYouTubeMobileUrl(url: String): String {
-    // Extract video ID from various formats
-    val patterns = listOf(
-        Regex("youtube\\.com/shorts/([a-zA-Z0-9_-]+)"),
-        Regex("youtu\\.be/([a-zA-Z0-9_-]+)"),
-        Regex("youtube\\.com/watch\\?v=([a-zA-Z0-9_-]+)"),
-        Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)"),
-        Regex("youtube\\.com/v/([a-zA-Z0-9_-]+)")
-    )
-    
-    for (pattern in patterns) {
-        val match = pattern.find(url)
-        if (match != null) {
-            val videoId = match.groupValues[1]
-            // Use YouTube Shorts URL for better mobile experience
-            return "https://www.youtube.com/shorts/$videoId"
-        }
-    }
-    
-    // If no pattern matches, return original URL
-    return url
-}
-
-/**
- * Single video page with YouTube WebView
+ * Simple video player with manual navigation buttons
+ * More reliable than gesture-based navigation with WebView
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun VideoPage(
-    video: Video,
-    isCurrentPage: Boolean,
-    pageIndex: Int,
-    totalPages: Int
+fun SimpleVideoPlayer(
+    videos: List<Video>,
+    viewModel: VideoViewModel
 ) {
-    val context = LocalContext.current
+    var currentIndex by remember { mutableIntStateOf(0) }
     var isLoading by remember { mutableStateOf(true) }
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
     
-    val youtubeUrl = remember(video.url) { 
-        getYouTubeMobileUrl(video.url) 
+    val currentVideo = videos[currentIndex]
+    val youtubeUrl = remember(currentVideo.url) { 
+        getYouTubeMobileUrl(currentVideo.url) 
     }
     
-    // Remember WebView to control playback
-    var webView by remember { mutableStateOf<WebView?>(null) }
-    
-    // Control playback based on current page
-    LaunchedEffect(isCurrentPage) {
-        webView?.let { wv ->
-            if (isCurrentPage) {
-                wv.onResume()
-                // Try to play the video
-                wv.evaluateJavascript(
-                    """
-                    (function() {
-                        var video = document.querySelector('video');
-                        if (video) video.play();
-                    })();
-                    """.trimIndent(),
-                    null
-                )
-            } else {
-                // Pause video when not visible
-                wv.evaluateJavascript(
-                    """
-                    (function() {
-                        var video = document.querySelector('video');
-                        if (video) video.pause();
-                    })();
-                    """.trimIndent(),
-                    null
-                )
-                wv.onPause()
-            }
-        }
+    // Update viewmodel
+    LaunchedEffect(currentIndex) {
+        viewModel.setCurrentVideoIndex(currentIndex)
     }
     
     // Cleanup WebView
@@ -224,50 +137,36 @@ fun VideoPage(
         }
     }
     
+    fun goToNext() {
+        if (videos.isNotEmpty()) {
+            currentIndex = (currentIndex + 1) % videos.size
+            isLoading = true
+            webView?.loadUrl(getYouTubeMobileUrl(videos[currentIndex].url))
+        }
+    }
+    
+    fun goToPrevious() {
+        if (videos.isNotEmpty()) {
+            currentIndex = if (currentIndex - 1 < 0) videos.size - 1 else currentIndex - 1
+            isLoading = true
+            webView?.loadUrl(getYouTubeMobileUrl(videos[currentIndex].url))
+        }
+    }
+    
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // YouTube WebView - loads YouTube directly like a browser
-        // Custom WebView that allows vertical swipes to pass through to the pager
+        // YouTube WebView
         AndroidView(
             factory = { ctx ->
-                object : WebView(ctx) {
-                    private var startY = 0f
-                    private var startX = 0f
-                    private val swipeThreshold = 100f
-                    
-                    override fun onTouchEvent(event: MotionEvent): Boolean {
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                startY = event.y
-                                startX = event.x
-                                parent?.requestDisallowInterceptTouchEvent(true)
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                val deltaY = event.y - startY
-                                val deltaX = event.x - startX
-                                
-                                // If vertical swipe is detected, let parent handle it
-                                if (abs(deltaY) > swipeThreshold && abs(deltaY) > abs(deltaX) * 1.5f) {
-                                    parent?.requestDisallowInterceptTouchEvent(false)
-                                    return false
-                                }
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                parent?.requestDisallowInterceptTouchEvent(false)
-                            }
-                        }
-                        return super.onTouchEvent(event)
-                    }
-                }.apply {
+                WebView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                     
-                    // Enable cookies for YouTube
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     
@@ -282,11 +181,9 @@ fun VideoPage(
                         builtInZoomControls = false
                         displayZoomControls = false
                         allowContentAccess = true
-                        allowFileAccess = true
                         databaseEnabled = true
-                        javaScriptCanOpenWindowsAutomatically = true
                         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        userAgentString = "Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                        userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
                     }
                     
                     webViewClient = object : WebViewClient() {
@@ -294,7 +191,7 @@ fun VideoPage(
                             super.onPageFinished(view, url)
                             isLoading = false
                             
-                            // Auto-play video after page loads
+                            // Try to auto-play
                             view?.evaluateJavascript(
                                 """
                                 (function() {
@@ -310,37 +207,60 @@ fun VideoPage(
                         }
                         
                         override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
-                            // Stay within YouTube
                             val url = request?.url?.toString() ?: return false
-                            return if (url.contains("youtube.com") || url.contains("youtu.be")) {
-                                false // Allow YouTube navigation
-                            } else {
-                                true // Block other URLs
-                            }
+                            return !(url.contains("youtube.com") || url.contains("youtu.be"))
                         }
                     }
                     
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                            super.onProgressChanged(view, newProgress)
-                            if (newProgress > 80) {
-                                isLoading = false
-                            }
-                        }
-                    }
-                    
+                    webChromeClient = WebChromeClient()
                     setBackgroundColor(android.graphics.Color.BLACK)
-                    
-                    // Load the YouTube URL directly
                     loadUrl(youtubeUrl)
-                    
                     webView = this
                 }
             },
-            modifier = Modifier.fillMaxSize(),
-            update = { wv ->
-                webView = wv
-            }
+            modifier = Modifier.fillMaxSize()
+        )
+        
+        // Left edge swipe zone for navigation
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(60.dp)
+                .align(Alignment.CenterStart)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (abs(dragOffset) > 100) {
+                                if (dragOffset < 0) goToNext() else goToPrevious()
+                            }
+                            dragOffset = 0f
+                        },
+                        onVerticalDrag = { _, dragAmount ->
+                            dragOffset += dragAmount
+                        }
+                    )
+                }
+        )
+        
+        // Right edge swipe zone for navigation
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(60.dp)
+                .align(Alignment.CenterEnd)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (abs(dragOffset) > 100) {
+                                if (dragOffset < 0) goToNext() else goToPrevious()
+                            }
+                            dragOffset = 0f
+                        },
+                        onVerticalDrag = { _, dragAmount ->
+                            dragOffset += dragAmount
+                        }
+                    )
+                }
         )
         
         // Loading indicator
@@ -352,47 +272,84 @@ fun VideoPage(
         ) {
             Box(
                 modifier = Modifier
-                    .size(100.dp)
+                    .size(80.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color.Black.copy(alpha = 0.7f)),
+                    .background(Color.Black.copy(alpha = 0.8f)),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(
                     color = KidsPink,
-                    modifier = Modifier.size(50.dp),
+                    modifier = Modifier.size(40.dp),
                     strokeWidth = 4.dp
                 )
             }
         }
         
-        // Top overlay with app name
+        // Top bar with app name
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(100.dp)
                 .align(Alignment.TopCenter)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.6f),
+                            Color.Black.copy(alpha = 0.7f),
                             Color.Transparent
                         )
                     )
                 )
-        )
+                .padding(top = 40.dp, bottom = 20.dp)
+        ) {
+            Text(
+                text = "🌟 Kids Safe Reels 🌟",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
         
-        // App title at top
-        Text(
-            text = "🌟 Kids Safe Reels 🌟",
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
+        // Navigation buttons on right side
+        Column(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 45.dp)
-        )
+                .align(Alignment.CenterEnd)
+                .padding(end = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Previous button
+            IconButton(
+                onClick = { goToPrevious() },
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.6f))
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Previous",
+                    tint = Color.White,
+                    modifier = Modifier.size(35.dp)
+                )
+            }
+            
+            // Next button
+            IconButton(
+                onClick = { goToNext() },
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.6f))
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Next",
+                    tint = Color.White,
+                    modifier = Modifier.size(35.dp)
+                )
+            }
+        }
         
-        // Bottom overlay with video info
+        // Bottom info bar
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -405,22 +362,22 @@ fun VideoPage(
                         )
                     )
                 )
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(16.dp)
         ) {
             Column {
                 // Video title
                 Text(
-                    text = video.title,
+                    text = currentVideo.title,
                     color = Color.White,
-                    fontSize = 18.sp,
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
                 
-                if (video.description != null) {
+                if (currentVideo.description != null) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = video.description,
-                        color = Color.White.copy(alpha = 0.8f),
+                        text = currentVideo.description,
+                        color = Color.White.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
                 }
@@ -433,34 +390,25 @@ fun VideoPage(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val colors = listOf(KidsPurple, KidsPink, KidsBlue, KidsGreen, KidsOrange, KidsYellow)
-                    repeat(minOf(totalPages, 10)) { index ->
+                    repeat(minOf(videos.size, 10)) { index ->
                         val color = colors[index % colors.size]
                         Box(
                             modifier = Modifier
-                                .size(if (index == pageIndex) 10.dp else 6.dp)
+                                .size(if (index == currentIndex) 10.dp else 6.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (index == pageIndex) color
+                                    if (index == currentIndex) color
                                     else Color.White.copy(alpha = 0.4f)
                                 )
                         )
                     }
-                    if (totalPages > 10) {
-                        Text(
-                            text = " +${totalPages - 10}",
-                            color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-                
-                // Swipe hint (only show on first view)
-                if (pageIndex == 0 && totalPages > 1) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
                     Text(
-                        text = "⬆️ Swipe to browse • Videos loop forever!",
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 11.sp
+                        text = "${currentIndex + 1} / ${videos.size}",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
                     )
                 }
                 
@@ -471,7 +419,28 @@ fun VideoPage(
 }
 
 /**
- * Loading screen with fun animation
+ * Convert YouTube URL to mobile-friendly format
+ */
+fun getYouTubeMobileUrl(url: String): String {
+    val patterns = listOf(
+        Regex("youtube\\.com/shorts/([a-zA-Z0-9_-]+)"),
+        Regex("youtu\\.be/([a-zA-Z0-9_-]+)"),
+        Regex("youtube\\.com/watch\\?v=([a-zA-Z0-9_-]+)"),
+        Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)")
+    )
+    
+    for (pattern in patterns) {
+        val match = pattern.find(url)
+        if (match != null) {
+            val videoId = match.groupValues[1]
+            return "https://www.youtube.com/shorts/$videoId"
+        }
+    }
+    return url
+}
+
+/**
+ * Loading screen
  */
 @Composable
 fun LoadingScreen() {
@@ -488,10 +457,7 @@ fun LoadingScreen() {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = "🎬",
-                fontSize = 80.sp
-            )
+            Text(text = "🎬", fontSize = 80.sp)
             Spacer(modifier = Modifier.height(20.dp))
             CircularProgressIndicator(
                 color = Color.White,
@@ -510,7 +476,7 @@ fun LoadingScreen() {
 }
 
 /**
- * Error screen with retry option
+ * Error screen
  */
 @Composable
 fun ErrorScreen(
@@ -531,10 +497,7 @@ fun ErrorScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(32.dp)
         ) {
-            Text(
-                text = "😢",
-                fontSize = 80.sp
-            )
+            Text(text = "😢", fontSize = 80.sp)
             Spacer(modifier = Modifier.height(20.dp))
             Text(
                 text = "Oops!",
