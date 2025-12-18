@@ -4,7 +4,9 @@ package com.kidssafereels.ui
 
 import android.annotation.SuppressLint
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -23,10 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -78,11 +79,11 @@ fun VideoPlayerScreen(
             is VideoUiState.Success -> {
                 if (state.videos.isEmpty()) {
                     ErrorScreen(
-                        message = "No videos found. Add videos to your gist!",
+                        message = "No videos found!",
                         onRetry = { viewModel.refresh() }
                     )
                 } else {
-                    SimpleVideoPlayer(videos = state.videos, viewModel = viewModel)
+                    VideoPlayerWithButtons(videos = state.videos, viewModel = viewModel)
                 }
             }
             is VideoUiState.Error -> ErrorScreen(
@@ -94,9 +95,9 @@ fun VideoPlayerScreen(
 }
 
 /**
- * Extract YouTube video ID from URL
+ * Convert any YouTube URL to Shorts format
  */
-fun extractVideoId(url: String): String? {
+fun getYouTubeShortsUrl(url: String): String {
     val patterns = listOf(
         Regex("youtube\\.com/shorts/([a-zA-Z0-9_-]+)"),
         Regex("youtu\\.be/([a-zA-Z0-9_-]+)"),
@@ -104,87 +105,90 @@ fun extractVideoId(url: String): String? {
         Regex("youtube\\.com/embed/([a-zA-Z0-9_-]+)")
     )
     for (pattern in patterns) {
-        pattern.find(url)?.let { return it.groupValues[1] }
+        pattern.find(url)?.let { 
+            val videoId = it.groupValues[1]
+            return "https://m.youtube.com/shorts/$videoId"
+        }
     }
-    return null
-}
-
-/**
- * Generate HTML with YouTube IFrame Player - clean, no recommendations
- */
-fun generatePlayerHtml(videoId: String): String {
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { 
-            width: 100%; 
-            height: 100%; 
-            background: #000; 
-            overflow: hidden;
-        }
-        #player {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 100%;
-            height: 100%;
-        }
-        iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-    </style>
-</head>
-<body>
-    <div id="player">
-        <iframe 
-            src="https://www.youtube.com/embed/$videoId?autoplay=1&mute=0&loop=1&playlist=$videoId&controls=1&modestbranding=1&rel=0&fs=0&playsinline=1&showinfo=0&iv_load_policy=3&disablekb=1"
-            allow="autoplay; encrypted-media"
-            allowfullscreen>
-        </iframe>
-    </div>
-</body>
-</html>
-    """.trimIndent()
+    return url
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun SimpleVideoPlayer(
+fun VideoPlayerWithButtons(
     videos: List<Video>,
     viewModel: VideoViewModel
 ) {
     var currentIndex by remember { mutableIntStateOf(0) }
-    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var isLoading by remember { mutableStateOf(true) }
-    var key by remember { mutableIntStateOf(0) } // Force WebView recreation
+    val context = LocalContext.current
+    
+    // Create WebView once and reuse
+    val webView = remember {
+        WebView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            
+            // Enable cookies
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                mediaPlaybackRequiresUserGesture = false
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                cacheMode = WebSettings.LOAD_DEFAULT
+                setSupportZoom(false)
+                builtInZoomControls = false
+                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                // Mobile user agent
+                userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            }
+            
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    isLoading = false
+                }
+                
+                // Block navigation to other videos
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                    val requestUrl = request?.url?.toString() ?: return true
+                    // Only allow the initial shorts URL, block all other navigation
+                    return !requestUrl.contains("/shorts/")
+                }
+            }
+            
+            webChromeClient = WebChromeClient()
+            setBackgroundColor(android.graphics.Color.BLACK)
+        }
+    }
+    
+    // Load video when index changes
+    LaunchedEffect(currentIndex) {
+        isLoading = true
+        viewModel.setCurrentVideoIndex(currentIndex)
+        val url = getYouTubeShortsUrl(videos[currentIndex].url)
+        webView.loadUrl(url)
+    }
+    
+    // Cleanup
+    DisposableEffect(Unit) {
+        onDispose { webView.destroy() }
+    }
     
     val currentVideo = videos.getOrNull(currentIndex) ?: return
-    val videoId = remember(currentVideo.url) { extractVideoId(currentVideo.url) }
     
-    LaunchedEffect(currentIndex) {
-        viewModel.setCurrentVideoIndex(currentIndex)
+    fun goNext() {
+        currentIndex = (currentIndex + 1) % videos.size
     }
     
-    DisposableEffect(Unit) {
-        onDispose { webViewInstance?.destroy() }
-    }
-    
-    fun navigateTo(index: Int) {
-        val newIndex = when {
-            index < 0 -> videos.size - 1
-            index >= videos.size -> 0
-            else -> index
-        }
-        currentIndex = newIndex
-        isLoading = true
-        key++ // Force WebView to recreate with new video
+    fun goPrev() {
+        currentIndex = if (currentIndex - 1 < 0) videos.size - 1 else currentIndex - 1
     }
     
     Box(
@@ -192,75 +196,18 @@ fun SimpleVideoPlayer(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // WebView with YouTube embed
-        if (videoId != null) {
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            mediaPlaybackRequiresUserGesture = false
-                            loadWithOverviewMode = true
-                            useWideViewPort = true
-                            cacheMode = WebSettings.LOAD_NO_CACHE
-                        }
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                isLoading = false
-                            }
-                        }
-                        webChromeClient = WebChromeClient()
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                        loadDataWithBaseURL(
-                            "https://www.youtube.com",
-                            generatePlayerHtml(videoId),
-                            "text/html",
-                            "UTF-8",
-                            null
-                        )
-                        webViewInstance = this
-                    }
-                },
-                modifier = Modifier.fillMaxSize(),
-                update = { view ->
-                    // When key changes, reload with new video
-                    val newVideoId = extractVideoId(videos.getOrNull(currentIndex)?.url ?: "")
-                    if (newVideoId != null) {
-                        view.loadDataWithBaseURL(
-                            "https://www.youtube.com",
-                            generatePlayerHtml(newVideoId),
-                            "text/html",
-                            "UTF-8",
-                            null
-                        )
-                    }
-                }
-            )
-        } else {
-            // Invalid video URL
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "⚠️ Invalid video URL",
-                    color = Color.White,
-                    fontSize = 18.sp
-                )
-            }
-        }
+        // WebView
+        AndroidView(
+            factory = { webView },
+            modifier = Modifier.fillMaxSize()
+        )
         
         // Loading overlay
         if (isLoading) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.7f)),
+                    .background(Color.Black),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = KidsPink, strokeWidth = 4.dp)
@@ -277,7 +224,7 @@ fun SimpleVideoPlayer(
                         listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
                     )
                 )
-                .padding(top = 40.dp, bottom = 30.dp),
+                .padding(top = 45.dp, bottom = 30.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
@@ -288,45 +235,45 @@ fun SimpleVideoPlayer(
             )
         }
         
-        // Navigation buttons - LEFT side (Previous)
+        // PREV button - Left side
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 8.dp)
-                .size(60.dp)
+                .padding(start = 12.dp)
+                .size(65.dp)
                 .clip(CircleShape)
-                .background(KidsPurple.copy(alpha = 0.8f))
-                .clickable { navigateTo(currentIndex - 1) },
+                .background(KidsPurple)
+                .clickable { goPrev() },
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Filled.KeyboardArrowUp,
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                 contentDescription = "Previous",
                 tint = Color.White,
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(45.dp)
             )
         }
         
-        // Navigation buttons - RIGHT side (Next)
+        // NEXT button - Right side
         Box(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .padding(end = 8.dp)
-                .size(60.dp)
+                .padding(end = 12.dp)
+                .size(65.dp)
                 .clip(CircleShape)
-                .background(KidsPink.copy(alpha = 0.8f))
-                .clickable { navigateTo(currentIndex + 1) },
+                .background(KidsPink)
+                .clickable { goNext() },
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = "Next",
                 tint = Color.White,
-                modifier = Modifier.size(40.dp)
+                modifier = Modifier.size(45.dp)
             )
         }
         
-        // Bottom info bar
+        // Bottom bar with video info
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -336,8 +283,9 @@ fun SimpleVideoPlayer(
                         listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))
                     )
                 )
-                .padding(16.dp)
+                .padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
+            // Title
             Text(
                 text = currentVideo.title,
                 color = Color.White,
@@ -345,6 +293,7 @@ fun SimpleVideoPlayer(
                 fontWeight = FontWeight.Bold
             )
             
+            // Description
             currentVideo.description?.let { desc ->
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -356,36 +305,36 @@ fun SimpleVideoPlayer(
             
             Spacer(modifier = Modifier.height(12.dp))
             
-            // Video counter and dots
+            // Dots and counter
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 val colors = listOf(KidsPurple, KidsPink, KidsBlue, KidsGreen, KidsOrange, KidsYellow)
-                repeat(minOf(videos.size, 8)) { index ->
+                repeat(minOf(videos.size, 10)) { index ->
                     Box(
                         modifier = Modifier
-                            .size(if (index == currentIndex) 12.dp else 8.dp)
+                            .size(if (index == currentIndex) 14.dp else 10.dp)
                             .clip(CircleShape)
                             .background(
                                 if (index == currentIndex) colors[index % colors.size]
                                 else Color.White.copy(alpha = 0.3f)
                             )
-                            .clickable { navigateTo(index) }
+                            .clickable { currentIndex = index }
                     )
                 }
                 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(16.dp))
                 
                 Text(
-                    text = "${currentIndex + 1} of ${videos.size}",
-                    color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
+                    text = "${currentIndex + 1} / ${videos.size}",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
             
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }
