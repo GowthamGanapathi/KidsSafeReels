@@ -3,6 +3,7 @@
 package com.kidssafereels.ui
 
 import android.annotation.SuppressLint
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -123,9 +124,48 @@ fun VideoPlayerWithButtons(
     var isLoading by remember { mutableStateOf(true) }
     val context = LocalContext.current
     
-    // Create WebView once and reuse
+    // Create custom WebView that blocks vertical swipes (to prevent YouTube navigation)
     val webView = remember {
-        WebView(context).apply {
+        object : WebView(context) {
+            private var startY = 0f
+            private var startX = 0f
+            
+            @SuppressLint("ClickableViewAccessibility")
+            override fun onTouchEvent(event: MotionEvent): Boolean {
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.x
+                        startY = event.y
+                        // Allow the DOWN event
+                        return super.onTouchEvent(event)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val deltaX = kotlin.math.abs(event.x - startX)
+                        val deltaY = kotlin.math.abs(event.y - startY)
+                        
+                        // Block vertical swipes (which YouTube uses to navigate)
+                        // Allow small movements for taps and horizontal for seeking
+                        if (deltaY > 30 && deltaY > deltaX) {
+                            // Block vertical swipe - don't pass to WebView
+                            return true
+                        }
+                        return super.onTouchEvent(event)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val deltaX = kotlin.math.abs(event.x - startX)
+                        val deltaY = kotlin.math.abs(event.y - startY)
+                        
+                        // Only allow tap (small movement)
+                        if (deltaX < 30 && deltaY < 30) {
+                            return super.onTouchEvent(event)
+                        }
+                        // Block swipe releases
+                        return true
+                    }
+                }
+                return super.onTouchEvent(event)
+            }
+        }.apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -145,7 +185,6 @@ fun VideoPlayerWithButtons(
                 setSupportZoom(false)
                 builtInZoomControls = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                // Mobile user agent
                 userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
             }
             
@@ -153,18 +192,56 @@ fun VideoPlayerWithButtons(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     isLoading = false
+                    
+                    // Inject JavaScript to:
+                    // 1. Unmute video
+                    // 2. Disable YouTube's swipe navigation
+                    view?.evaluateJavascript(
+                        """
+                        (function() {
+                            // Disable all touch/swipe events on YouTube's navigation
+                            document.body.style.touchAction = 'none';
+                            document.body.style.overscrollBehavior = 'none';
+                            document.documentElement.style.overflow = 'hidden';
+                            
+                            // Block swipe events
+                            document.addEventListener('touchmove', function(e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                            }, { passive: false });
+                            
+                            // Unmute video
+                            var attempts = 0;
+                            var unmuteInterval = setInterval(function() {
+                                var video = document.querySelector('video');
+                                if (video) {
+                                    video.muted = false;
+                                    video.volume = 1.0;
+                                    video.play();
+                                    video.loop = true;
+                                }
+                                attempts++;
+                                if (attempts > 20) clearInterval(unmuteInterval);
+                            }, 500);
+                        })();
+                        """.trimIndent(),
+                        null
+                    )
                 }
                 
-                // Block navigation to other videos
+                // Block ALL navigation - only our buttons can change videos
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                    val requestUrl = request?.url?.toString() ?: return true
-                    // Only allow the initial shorts URL, block all other navigation
-                    return !requestUrl.contains("/shorts/")
+                    // Block everything - no navigation allowed
+                    return true
                 }
             }
             
             webChromeClient = WebChromeClient()
             setBackgroundColor(android.graphics.Color.BLACK)
+            
+            // Disable scrolling
+            isVerticalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled = false
         }
     }
     
